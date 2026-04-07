@@ -599,40 +599,43 @@
             }
         });
 
-        // Generate time slots dynamically (first slot = 30min from now)
+        // Picnic day — on this date, time slots filter by current time
+        const PICNIC_DATE = '2026-06-07'; // YYYY-MM-DD
+
         function populateTimeSlots() {
             const select = document.getElementById('pickupTime');
             const now = new Date();
-            const earliest = new Date(now.getTime() + 30 * 60 * 1000); // 30 min from now
-
-            // Round up to next 30-min mark
-            const minutes = earliest.getMinutes();
-            if (minutes > 0 && minutes <= 30) {
-                earliest.setMinutes(30, 0, 0);
-            } else if (minutes > 30) {
-                earliest.setHours(earliest.getHours() + 1, 0, 0, 0);
-            }
-
-            // End of service at 4:00 PM
-            const endTime = new Date(now);
-            endTime.setHours(16, 0, 0, 0);
-
-            // Start no earlier than 12:00 PM
-            const startFloor = new Date(now);
-            startFloor.setHours(12, 0, 0, 0);
-
-            let slotTime = earliest < startFloor ? new Date(startFloor) : new Date(earliest);
+            const today = now.toISOString().slice(0, 10);
+            const isPicnicDay = today === PICNIC_DATE;
 
             // Clear existing options except the placeholder
             while (select.options.length > 1) select.remove(1);
 
-            if (slotTime > endTime) {
-                const opt = document.createElement('option');
-                opt.value = '';
-                opt.textContent = 'No more time slots available today';
-                opt.disabled = true;
-                select.appendChild(opt);
-                return;
+            // Start at 12:00 PM, end at 5:00 PM
+            let slotTime = new Date(now);
+            slotTime.setHours(12, 0, 0, 0);
+            const endTime = new Date(now);
+            endTime.setHours(17, 0, 0, 0);
+
+            if (isPicnicDay) {
+                // On picnic day, earliest slot is 30min from now, rounded up
+                const earliest = new Date(now.getTime() + 30 * 60 * 1000);
+                const minutes = earliest.getMinutes();
+                if (minutes > 0 && minutes <= 30) {
+                    earliest.setMinutes(30, 0, 0);
+                } else if (minutes > 30) {
+                    earliest.setHours(earliest.getHours() + 1, 0, 0, 0);
+                }
+                if (earliest > slotTime) slotTime = earliest;
+
+                if (slotTime > endTime) {
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.textContent = 'No more time slots available today';
+                    opt.disabled = true;
+                    select.appendChild(opt);
+                    return;
+                }
             }
 
             while (slotTime <= endTime) {
