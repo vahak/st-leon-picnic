@@ -18,6 +18,7 @@
 // 9. Set "Who has access" to: Anyone
 // 10. Click Deploy and copy the URL
 // 11. Paste that URL into the order-form.html where it says YOUR_GOOGLE_SCRIPT_URL
+// 12. A "Packing List" sheet will be auto-created on the first order
 // ============================================================
 
 function doPost(e) {
@@ -45,6 +46,9 @@ function doPost(e) {
       ""                       // Notes (internal, filled manually)
     ]);
 
+    // Add items to Packing List sheet
+    addToPackingList(data);
+
     // Optional: Send email notification for each new order
     // Uncomment the lines below and replace with your email
     //
@@ -67,6 +71,84 @@ function doPost(e) {
     return ContentService
       .createTextOutput(JSON.stringify({ result: "error", message: error.toString() }))
       .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ============================================================
+// PACKING LIST — each item gets its own row with a checkbox
+// Orders are color-coded so the packer can see groupings
+// ============================================================
+var PACKING_COLORS = [
+  '#d9ead3', // light green
+  '#d0e0f0', // light blue
+  '#fce5cd', // light orange
+  '#d9d2e9', // light purple
+  '#fff2cc', // light yellow
+  '#e6cece', // light pink
+  '#c9daf8', // light indigo
+  '#d5f5e3', // light mint
+];
+
+function addToPackingList(data) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var packSheet = ss.getSheetByName('Packing List');
+
+  // Create sheet with headers if it doesn't exist
+  if (!packSheet) {
+    packSheet = ss.insertSheet('Packing List');
+    packSheet.appendRow(['Packed', 'Order #', 'Name', 'Pickup Time', 'Item', 'Qty', 'Special Instructions']);
+    packSheet.getRange('A1:G1').setFontWeight('bold');
+    packSheet.setColumnWidth(1, 60);   // Packed
+    packSheet.setColumnWidth(5, 250);  // Item
+  }
+
+  // Pick a color based on current row count to alternate between orders
+  var lastRow = packSheet.getLastRow();
+  var colorIndex = 0;
+  if (lastRow > 1) {
+    var prevOrder = packSheet.getRange(lastRow, 2).getValue();
+    var prevColor = packSheet.getRange(lastRow, 2).getBackground();
+    var prevColorIndex = PACKING_COLORS.indexOf(prevColor);
+    if (prevOrder === data.orderNumber) {
+      colorIndex = prevColorIndex >= 0 ? prevColorIndex : 0;
+    } else {
+      colorIndex = (prevColorIndex + 1) % PACKING_COLORS.length;
+    }
+  }
+  var rowColor = PACKING_COLORS[colorIndex];
+
+  // Parse items (separated by newlines)
+  var items = data.items.split('\n');
+  var startRow = lastRow + 1;
+
+  for (var i = 0; i < items.length; i++) {
+    var itemText = items[i].trim();
+    if (!itemText) continue;
+
+    // Parse "2x Chicken Kebab Platter ($40.00)" format
+    var qtyMatch = itemText.match(/^(\d+)x\s+(.+?)(?:\s+\(\$[\d.]+\))?$/);
+    var qty = qtyMatch ? qtyMatch[1] : '';
+    var itemName = qtyMatch ? qtyMatch[2] : itemText;
+
+    packSheet.appendRow([
+      false,                              // Packed checkbox
+      data.orderNumber,                   // Order #
+      data.name,                          // Name
+      data.time,                          // Pickup Time
+      itemName,                           // Item
+      qty,                                // Qty
+      i === 0 ? (data.notes || '') : ''   // Special instructions on first row only
+    ]);
+  }
+
+  // Apply color and checkboxes to the new rows
+  var endRow = packSheet.getLastRow();
+  if (endRow >= startRow) {
+    var range = packSheet.getRange(startRow, 1, endRow - startRow + 1, 7);
+    range.setBackground(rowColor);
+    // Insert checkboxes in column A
+    var checkRange = packSheet.getRange(startRow, 1, endRow - startRow + 1, 1);
+    checkRange.insertCheckboxes();
   }
 }
 
