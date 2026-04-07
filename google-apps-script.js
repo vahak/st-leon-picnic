@@ -21,6 +21,17 @@
 // 12. A "Packing List" sheet will be auto-created on the first order
 // ============================================================
 
+var PACKING_COLORS = [
+  '#d9ead3', // light green
+  '#d0e0f0', // light blue
+  '#fce5cd', // light orange
+  '#d9d2e9', // light purple
+  '#fff2cc', // light yellow
+  '#e6cece', // light pink
+  '#c9daf8', // light indigo
+  '#d5f5e3', // light mint
+];
+
 function doPost(e) {
   try {
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
@@ -46,8 +57,18 @@ function doPost(e) {
       ""                       // Notes (internal, filled manually)
     ]);
 
+    // Determine color for this order
+    var rowColor = getOrderColor(sheet);
+
+    // Apply color to the new order row
+    var orderRow = sheet.getLastRow();
+    sheet.getRange(orderRow, 1, 1, 17).setBackground(rowColor);
+
+    // Check for duplicate phone number (potential combined order)
+    var combineFlag = checkDuplicatePhone(sheet, data.phone, orderRow);
+
     // Add items to Packing List sheet
-    addToPackingList(data);
+    addToPackingList(data, rowColor, combineFlag);
 
     // Optional: Send email notification for each new order
     // Uncomment the lines below and replace with your email
@@ -75,51 +96,67 @@ function doPost(e) {
 }
 
 // ============================================================
-// PACKING LIST — each item gets its own row with a checkbox
-// Orders are color-coded so the packer can see groupings
+// Get the next alternating color for the Orders sheet
 // ============================================================
-var PACKING_COLORS = [
-  '#d9ead3', // light green
-  '#d0e0f0', // light blue
-  '#fce5cd', // light orange
-  '#d9d2e9', // light purple
-  '#fff2cc', // light yellow
-  '#e6cece', // light pink
-  '#c9daf8', // light indigo
-  '#d5f5e3', // light mint
-];
+function getOrderColor(sheet) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return PACKING_COLORS[0];
 
-function addToPackingList(data) {
+  // Check the color of the previous order row
+  var prevColor = sheet.getRange(lastRow - 1, 1).getBackground();
+  var prevIndex = PACKING_COLORS.indexOf(prevColor);
+  var nextIndex = (prevIndex + 1) % PACKING_COLORS.length;
+  return PACKING_COLORS[nextIndex];
+}
+
+// ============================================================
+// Check if this phone number already placed an order
+// Returns the matching order number(s) or empty string
+// ============================================================
+function checkDuplicatePhone(sheet, phone, currentRow) {
+  if (!phone) return '';
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 2) return ''; // only header + this row
+
+  // Phone is in column E (5). Check all rows except header and current
+  var phoneCol = sheet.getRange(2, 5, lastRow - 2, 1).getValues(); // exclude current row
+  var orderCol = sheet.getRange(2, 2, lastRow - 2, 1).getValues();
+
+  // Normalize phone: strip non-digits
+  var normalizedPhone = phone.replace(/\D/g, '');
+  var matchingOrders = [];
+
+  for (var i = 0; i < phoneCol.length; i++) {
+    var existingPhone = String(phoneCol[i][0]).replace(/\D/g, '');
+    if (existingPhone === normalizedPhone) {
+      matchingOrders.push(String(orderCol[i][0]));
+    }
+  }
+
+  return matchingOrders.length > 0 ? matchingOrders.join(', ') : '';
+}
+
+// ============================================================
+// PACKING LIST — each item gets its own row with a checkbox
+// Orders are color-coded to match the Orders sheet
+// ============================================================
+function addToPackingList(data, rowColor, combineFlag) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var packSheet = ss.getSheetByName('Packing List');
 
   // Create sheet with headers if it doesn't exist
   if (!packSheet) {
     packSheet = ss.insertSheet('Packing List');
-    packSheet.appendRow(['Packed', 'Order #', 'Name', 'Pickup Time', 'Item', 'Qty', 'Special Instructions']);
-    packSheet.getRange('A1:G1').setFontWeight('bold');
+    packSheet.appendRow(['Packed', 'Order #', 'Name', 'Pickup Time', 'Item', 'Qty', 'Special Instructions', 'Combine Alert']);
+    packSheet.getRange('A1:H1').setFontWeight('bold');
     packSheet.setColumnWidth(1, 60);   // Packed
     packSheet.setColumnWidth(5, 250);  // Item
+    packSheet.setColumnWidth(8, 200);  // Combine Alert
   }
-
-  // Pick a color based on current row count to alternate between orders
-  var lastRow = packSheet.getLastRow();
-  var colorIndex = 0;
-  if (lastRow > 1) {
-    var prevOrder = packSheet.getRange(lastRow, 2).getValue();
-    var prevColor = packSheet.getRange(lastRow, 2).getBackground();
-    var prevColorIndex = PACKING_COLORS.indexOf(prevColor);
-    if (prevOrder === data.orderNumber) {
-      colorIndex = prevColorIndex >= 0 ? prevColorIndex : 0;
-    } else {
-      colorIndex = (prevColorIndex + 1) % PACKING_COLORS.length;
-    }
-  }
-  var rowColor = PACKING_COLORS[colorIndex];
 
   // Parse items (separated by newlines)
   var items = data.items.split('\n');
-  var startRow = lastRow + 1;
+  var startRow = packSheet.getLastRow() + 1;
 
   for (var i = 0; i < items.length; i++) {
     var itemText = items[i].trim();
@@ -130,6 +167,11 @@ function addToPackingList(data) {
     var qty = qtyMatch ? qtyMatch[1] : '';
     var itemName = qtyMatch ? qtyMatch[2] : itemText;
 
+    var combineText = '';
+    if (i === 0 && combineFlag) {
+      combineText = '⚠️ COMBINE w/ ' + combineFlag;
+    }
+
     packSheet.appendRow([
       false,                              // Packed checkbox
       data.orderNumber,                   // Order #
@@ -137,18 +179,53 @@ function addToPackingList(data) {
       data.time,                          // Pickup Time
       itemName,                           // Item
       qty,                                // Qty
-      i === 0 ? (data.notes || '') : ''   // Special instructions on first row only
+      i === 0 ? (data.notes || '') : '',  // Special instructions on first row only
+      combineText                         // Combine alert
     ]);
   }
 
   // Apply color and checkboxes to the new rows
   var endRow = packSheet.getLastRow();
   if (endRow >= startRow) {
-    var range = packSheet.getRange(startRow, 1, endRow - startRow + 1, 7);
+    var range = packSheet.getRange(startRow, 1, endRow - startRow + 1, 8);
     range.setBackground(rowColor);
     // Insert checkboxes in column A
     var checkRange = packSheet.getRange(startRow, 1, endRow - startRow + 1, 1);
     checkRange.insertCheckboxes();
+    // Bold the combine alert if present
+    if (combineFlag) {
+      var alertCell = packSheet.getRange(startRow, 8);
+      alertCell.setFontWeight('bold').setFontColor('#cc0000');
+    }
+  }
+
+  // Also flag the earlier order(s) on the packing list
+  if (combineFlag) {
+    flagEarlierOrders(packSheet, combineFlag.split(', '), data.orderNumber);
+  }
+}
+
+// ============================================================
+// Go back and flag earlier order(s) that share the same phone
+// ============================================================
+function flagEarlierOrders(packSheet, earlierOrderNumbers, newOrderNumber) {
+  var lastRow = packSheet.getLastRow();
+  if (lastRow <= 1) return;
+
+  var orderCol = packSheet.getRange(2, 2, lastRow - 1, 1).getValues();
+  var alertCol = packSheet.getRange(2, 8, lastRow - 1, 1).getValues();
+
+  for (var i = 0; i < orderCol.length; i++) {
+    var orderNum = String(orderCol[i][0]);
+    if (earlierOrderNumbers.indexOf(orderNum) >= 0) {
+      var existingAlert = String(alertCol[i][0]);
+      // Only update the first row of that order if not already flagged with this order
+      if (existingAlert.indexOf(newOrderNumber) < 0) {
+        var newAlert = existingAlert ? existingAlert + ', ' + newOrderNumber : '⚠️ COMBINE w/ ' + newOrderNumber;
+        var cell = packSheet.getRange(i + 2, 8);
+        cell.setValue(newAlert).setFontWeight('bold').setFontColor('#cc0000');
+      }
+    }
   }
 }
 
